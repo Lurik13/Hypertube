@@ -1,9 +1,9 @@
 # hypertube
 
-Lurik13: Responsable du front
-Gkubina: Gestion de toute la logique torrent
-lumingoprogramming: Gestion de tout ce qui touche aux users (back + aide au front)
-KoganeShiro: Monitoring dashboard
+- Lurik13: Responsable du front
+- Gkubina: Gestion de toute la logique torrent
+- lumingoprogramming: Gestion de tout ce qui touche aux users (back + aide au front)
+- KoganeShiro: Monitoring dashboard
 
 KoganeShiro + Gkubina apres avoir fini leur partie -> Agregateur de bases (IMDB + Base torrents + nos bases)
 
