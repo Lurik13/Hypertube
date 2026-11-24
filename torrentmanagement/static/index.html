@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark light">
+    <title>Torrentmanagement · Hypertube</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="/static/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/" aria-label="Hypertube Torrentmanagement home">
+        <span class="brand-mark" aria-hidden="true">H</span>
+        <span>Hypertube <span class="brand-detail">/ Torrentmanagement</span></span>
+      </a>
+      <span class="local-badge"><span aria-hidden="true"></span> Local demo</span>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">MEDIA WORKFLOW POC</p>
+        <h1 id="page-title">Bring a film to life.</h1>
+        <p class="intro-copy">Upload a legally sourced torrent file, let it download in the background, and start playback as soon as the opening is ready.</p>
+      </section>
+
+      <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
+
+      <div class="workspace">
+        <section class="card upload-card" aria-labelledby="upload-title">
+          <div class="section-heading">
+            <div class="step-number">01</div>
+            <div>
+              <p class="eyebrow">START HERE</p>
+              <h2 id="upload-title">Add a torrent</h2>
+            </div>
+          </div>
+          <p class="muted">Choose a <code>.torrent</code> file manually selected from an approved legal source.</p>
+          <form id="upload-form">
+            <label class="file-picker" for="torrent-file">
+              <span class="file-icon" aria-hidden="true">↑</span>
+              <span id="file-label">Choose a .torrent file</span>
+              <input id="torrent-file" name="torrent" type="file" accept=".torrent,application/x-bittorrent" required>
+            </label>
+            <button class="button button-primary" type="submit">Start download <span aria-hidden="true">→</span></button>
+          </form>
+          <p class="fine-print">Only the largest supported video is selected by default. You can change it after the torrent is inspected.</p>
+        </section>
+
+        <section class="card jobs-card" aria-labelledby="jobs-title">
+          <div class="section-heading">
+            <div class="step-number">02</div>
+            <div>
+              <p class="eyebrow">BACKGROUND JOBS</p>
+              <h2 id="jobs-title">Your library</h2>
+            </div>
+            <span id="job-count" class="count-badge">0</span>
+          </div>
+          <div id="jobs-list" class="jobs-list">
+            <p class="empty-state">Your downloads will appear here.</p>
+          </div>
+        </section>
+      </div>
+
+      <section id="player-panel" class="card player-card" aria-labelledby="player-heading" hidden>
+        <div class="player-topline">
+          <div>
+            <p class="eyebrow">03 / NOW PLAYING</p>
+            <h2 id="player-heading">Select a download</h2>
+          </div>
+          <span id="playback-state" class="state-pill">Waiting</span>
+        </div>
+
+        <div class="player-layout">
+          <div class="player-column">
+            <video id="video-player" controls playsinline preload="metadata">
+              Your browser does not support HTML video.
+            </video>
+            <p id="readiness-copy" class="muted">Playback status will appear here.</p>
+          </div>
+          <aside class="media-details">
+            <label for="video-select">Video file</label>
+            <select id="video-select"></select>
+            <div class="progress-label">
+              <span>Download progress</span>
+              <span id="progress-value">0%</span>
+            </div>
+            <progress id="download-progress" max="1" value="0">0%</progress>
+            <p id="torrent-hash" class="hash"></p>
+
+            <form id="subtitle-form">
+              <h3>Subtitles</h3>
+              <label for="subtitle-title">Search title</label>
+              <input id="subtitle-title" name="title" type="text" maxlength="200" required>
+              <fieldset>
+                <legend>Languages (five matches total)</legend>
+                <label class="language-option"><input type="checkbox" name="language" value="en" checked> English</label>
+                <label class="language-option"><input type="checkbox" name="language" value="fr" checked> French</label>
+                <label class="language-option"><input type="checkbox" name="language" value="de" checked> German</label>
+                <label class="language-option"><input type="checkbox" name="language" value="it" checked> Italian</label>
+              </fieldset>
+              <button class="button button-secondary" type="submit">Find &amp; download subtitles</button>
+              <p id="subtitle-status" class="fine-print" role="status" aria-live="polite"></p>
+              <ul id="subtitle-list" class="subtitle-list"></ul>
+            </form>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <span>Hypertube · Torrentmanagement POC</span>
+      <span>Local demo · Use legally sourced media only</span>
+    </footer>
+  </body>
+</html>

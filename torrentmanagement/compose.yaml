@@ -1,0 +1,31 @@
+name: hypertube-torrentmanagement
+
+services:
+  torrentmanagement:
+    image: hypertube-torrentmanagement:poc
+    build:
+      context: .
+    ports:
+      - "127.0.0.1:${TM_HOST_PORT:-8000}:8000"
+    environment:
+      TM_DATA_DIR: /data
+      TM_MAX_TORRENT_BYTES: ${TM_MAX_TORRENT_BYTES:-10485760}
+      TM_MAX_TORRENT_CONTENT_BYTES: ${TM_MAX_TORRENT_CONTENT_BYTES:-214748364800}
+      TM_RANGE_CHUNK_BYTES: ${TM_RANGE_CHUNK_BYTES:-1048576}
+      TM_RANGE_WAIT_SECONDS: ${TM_RANGE_WAIT_SECONDS:-120}
+      TM_STREAM_WORKERS: ${TM_STREAM_WORKERS:-2}
+      SUBDL_API_KEY: ${SUBDL_API_KEY:-}
+    volumes:
+      - torrent-data:/data
+    init: true
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  torrent-data:
