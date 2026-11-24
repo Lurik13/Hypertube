@@ -1,1 +1,2 @@
-.github
+# Ignore everything inside .github/
+.github/*
