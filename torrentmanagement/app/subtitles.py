@@ -1,3 +1,5 @@
+"""SubDL adapter for bounded subtitle search, validation, and local storage."""
+
 import io
 import json
 import re
@@ -20,17 +22,23 @@ _SAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]+")
 
 
 class SubtitleProviderError(RuntimeError):
+    """Raised when the subtitle provider returns an unusable result."""
+
     pass
 
 
 class SubDLProvider:
+    """Search SubDL and persist safe subtitle assets behind a small adapter."""
+
     def __init__(self, settings: Settings, repository: Repository) -> None:
+        """Bind provider access to runtime credentials and metadata storage."""
         self.settings = settings
         self.repository = repository
 
     def _request(
         self, url: str, *, data: bytes | None = None
     ) -> tuple[bytes, str]:
+        """Perform one timed HTTP request with a hard response-size bound."""
         headers = {
             "Authorization": f"Bearer {self.settings.subdl_api_key}",
             "Accept": "application/json" if data is None else "*/*",
@@ -55,6 +63,7 @@ class SubDLProvider:
 
     @staticmethod
     def _language(candidate: dict[str, Any]) -> str | None:
+        """Map provider language names and codes to supported ISO identifiers."""
         raw_language = candidate.get("language") or candidate.get("lang")
         if isinstance(raw_language, dict):
             raw_language = raw_language.get("code") or raw_language.get("name")
@@ -75,6 +84,7 @@ class SubDLProvider:
 
     @staticmethod
     def _payload_file(body: bytes, content_type: str, candidate: dict[str, Any]) -> tuple[bytes, str]:
+        """Extract one supported subtitle from a response or ZIP archive."""
         if "text/html" in content_type.lower() or body.lstrip().lower().startswith(
             (b"<!doctype html", b"<html")
         ):
@@ -115,6 +125,7 @@ class SubDLProvider:
 
     @staticmethod
     def _filename(title: str, language: str, extension: str) -> str:
+        """Create a sanitized non-colliding name for a stored subtitle."""
         safe_title = _SAFE_FILENAME.sub("-", title).strip("-._")[:80] or "subtitle"
         return f"{safe_title}.{language}.{uuid.uuid4().hex[:8]}{extension}"
 
@@ -124,6 +135,7 @@ class SubDLProvider:
         title: str,
         languages: list[str],
     ) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+        """Download up to five language-matched tracks and report per-item failures."""
         if not self.settings.subdl_api_key:
             raise SubtitleProviderError("SUBDL_API_KEY is not configured")
         if not title.strip() or len(title) > 200:
@@ -202,6 +214,7 @@ class SubDLProvider:
         return downloaded, failures
 
     def asset_path(self, subtitle_id: str) -> Path | None:
+        """Resolve a subtitle only when its path remains inside managed storage."""
         subtitle = self.repository.get_subtitle(subtitle_id)
         if subtitle is None:
             return None

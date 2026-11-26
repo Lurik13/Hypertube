@@ -1,3 +1,4 @@
+<!-- Semantic single-page UI; app.js owns polling and API interactions. -->
 <!doctype html>
 <html lang="en">
   <head>
@@ -9,6 +10,7 @@
     <script src="/static/app.js" defer></script>
   </head>
   <body>
+    <!-- The header intentionally labels this unauthenticated build as local-only. -->
     <header class="site-header">
       <a class="brand" href="/" aria-label="Hypertube Torrentmanagement home">
         <span class="brand-mark" aria-hidden="true">H</span>
@@ -18,6 +20,7 @@
     </header>
 
     <main>
+      <!-- Explain the legal-source constraint before the upload action. -->
       <section class="intro" aria-labelledby="page-title">
         <p class="eyebrow">MEDIA WORKFLOW POC</p>
         <h1 id="page-title">Bring a film to life.</h1>
@@ -26,6 +29,7 @@
 
       <p id="notice" class="notice" role="status" aria-live="polite" hidden></p>
 
+      <!-- Upload and background-job library form the first workflow step. -->
       <div class="workspace">
         <section class="card upload-card" aria-labelledby="upload-title">
           <div class="section-heading">
@@ -44,7 +48,7 @@
             </label>
             <button class="button button-primary" type="submit">Start download <span aria-hidden="true">→</span></button>
           </form>
-          <p class="fine-print">Only the largest supported video is selected by default. You can change it after the torrent is inspected.</p>
+          <p class="fine-print">A browser-friendly MP4 or WebM is preferred for early playback. You can change the file after the torrent is inspected.</p>
         </section>
 
         <section class="card jobs-card" aria-labelledby="jobs-title">
@@ -62,6 +66,7 @@
         </section>
       </div>
 
+      <!-- The player panel is populated from the selected job and readiness API. -->
       <section id="player-panel" class="card player-card" aria-labelledby="player-heading" hidden>
         <div class="player-topline">
           <div>
@@ -108,6 +113,7 @@
       </section>
     </main>
 
+    <!-- Keep the local-demo and approved-media notices visible on every page. -->
     <footer class="site-footer">
       <span>Hypertube · Torrentmanagement POC</span>
       <span>Local demo · Use legally sourced media only</span>

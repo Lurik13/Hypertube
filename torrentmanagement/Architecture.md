@@ -1,7 +1,7 @@
 # Torrentmanagement POC Architecture
 
 **Status:** Product behavior and the POC implementation baseline are confirmed. Production deployment and production dependency approval are out of scope.  
-**Last updated:** 2026-11-24
+**Last updated:** 2026-11-26
 
 ## 1. Goals and scope
 
@@ -13,7 +13,7 @@ Included:
 
 - Reuse an existing job or completed media item when the torrent infohash is already known.
 - Download asynchronously and retain complete media until an operator invokes cleanup.
-- Choose the largest supported video in a torrent by default and allow the user to override the choice.
+- Prefer browser-native MP4/WebM candidates for the default selection, then prefer larger files within a format tier; allow the user to override the choice.
 - Prioritize startup pieces and missing pieces requested for playback.
 - Support range seeking during direct playback; keep partial transcoded playback sequential and non-seekable.
 - Download five subtitle matches total across English, French, German, and Italian.
@@ -31,7 +31,8 @@ Not included:
 
 - The uploaded `.torrent` metadata is parsed to calculate the infohash. The infohash is the deduplication key.
 - A repeated request reuses the existing job or completed media; it must not create another copy.
-- After reading torrent metadata, show the available files. Initially select the largest supported video, but allow an explicit override before playback.
+- After reading torrent metadata, show the available files. Initially prefer MP4/WebM candidates, then select the largest supported file in that tier. Other supported formats are the fallback. Always allow an explicit override.
+- Treat the extension preference as a heuristic only: inspect codecs and actual decodability before marking a file ready for direct playback. Browser-incompatible MP4/WebM still needs conversion after completion.
 - Download only the selected video and required torrent metadata; avoid downloading unrelated files in multi-file torrents.
 - Treat torrent paths and metadata as untrusted. Normalize paths and reject path traversal or invalid entries before writing to storage.
 
@@ -47,10 +48,12 @@ Failures transition to `failed` with a safe, user-visible reason and retryabilit
 
 Persist job state and torrent resume data so a service restart can reconcile active downloads instead of creating duplicates or falsely reporting completion.
 
+The UI must label lifecycle and percentage separately. It may show `99.9% · still downloading`, but it must show `100% · download complete` only when the backend reports `complete`; visual rounding must never imply completion.
+
 ### 2.3 Piece priorities and readiness
 
 - Prioritize the selected video's initial pieces and its final pieces early. The final pieces can contain container index/metadata needed for playback.
-- Readiness requires a contiguous, verified, decodable **10 seconds from the beginning** and any container metadata required by the selected playback mode.
+- Readiness requires the first video frame to be verified and decodable, plus any container metadata required by the selected playback mode. Further media bytes are requested and prioritized as the player consumes them.
 - Readiness is evaluated for the selected video/output, not by a fixed byte count. Container and codec differences make a byte-only threshold unreliable.
 - When a client requests a byte range that is not yet available during direct playback, raise the priority of the missing torrent pieces and wait for them. Waiting must be bounded; on timeout, return a retryable response and expose current job progress rather than occupying a request indefinitely.
 
@@ -69,7 +72,7 @@ The player must distinguish a sequential partial-transcode response from a range
 
 Prefer remuxing when the codecs are already browser-compatible; transcode only when required. For completed conversion, a conventional MP4 with its index at the beginning is the initial candidate for range playback. For incomplete conversion, test a sequential fragmented-MP4 output with the actual browser/player combination; do not advertise seeking for it.
 
-The selected video becomes streamable when the 10-second readiness condition is met for its delivery mode. If an input format cannot be safely/properly decoded from the available prefix, defer readiness until enough data arrives or until the full file is available; report the reason rather than presenting a success-shaped fallback.
+The selected video becomes streamable as soon as its opening video frame and required container metadata can be verified and decoded. If an input format cannot be safely/properly decoded from the available prefix, defer readiness until enough data arrives or until the full file is available; report the reason rather than presenting a success-shaped fallback.
 
 ### 2.5 Subtitle behavior
 
@@ -100,7 +103,7 @@ Cleanup must stop or drain active torrent/transcode work before deletion, be saf
 Browser UI
    | job, readiness, subtitles
    v
-HTTP API and job orchestrator ---- Metadata repository (SQLite candidate)
+HTTP API and job orchestrator ---- Metadata repository (PostgreSQL)
    |                                     |
    +---- Torrent-engine adapter          +---- Docker file-storage volume
    |          |                                  ^
@@ -160,17 +163,21 @@ PyPI listed `libtorrent 2.1.3` as the latest release on 2026-11-24, with CPython
 
 ### 5.2 API/runtime: Python 3.13, FastAPI, and Uvicorn
 
-**Decision:** Implement the API in Python 3.13 with FastAPI `0.165.0` and Uvicorn `0.54.0`. Serve the static POC frontend from the same API process. Use synchronous endpoints for filesystem/torrent operations that wait, and stream response bodies incrementally; keep the torrent worker asynchronous relative to request creation.
+**Decision:** Implement the API in Python 3.13 with FastAPI `0.165.0`, Uvicorn `0.54.0`, and psycopg `3.3.9`. Serve the static POC frontend from the same API process. Use synchronous endpoints for filesystem/torrent operations that wait, and stream response bodies incrementally; keep the torrent worker asynchronous relative to request creation.
 
 FastAPI provides typed request/response contracts and Uvicorn serves the single local process. A Go service or a TypeScript service with a separate torrent daemon would add a process/adapter boundary without benefiting this single-service POC. Direct and resolved transitive Python dependencies are pinned in `requirements.txt`; the Python base image is digest-pinned. Recheck all dependencies and container packages before production use.
 
-### 5.3 Metadata and file storage: SQLite plus a Docker volume
+### 5.3 Metadata and file storage: PostgreSQL plus separate Docker volumes
 
-**Decision:** Use Python's standard-library SQLite support for local POC metadata and a Docker-managed persistent volume for torrent payloads, converted media, and subtitles.
+**Decision:** Use the official PostgreSQL 19 Alpine image for metadata, psycopg as the Python adapter, and separate Docker-managed persistent volumes for database files and torrent/media/subtitle payloads. Keep PostgreSQL private on the Compose network; publish only the loopback API port.
 
-SQLite fits a single local service and makes infohash uniqueness and job transitions straightforward. Store large media as files, not database blobs. Keep the metadata repository behind an interface so a later shared/multi-instance deployment can move to a server database without changing the domain contract.
+PostgreSQL enforces infohash uniqueness and job/subtitle relationships, while large media remains outside the database as files. The application uses a dedicated non-superuser role initialized from `.env`; a separate PostgreSQL bootstrap account is not passed to the API. Keep the repository interface independent from the driver so the domain and HTTP contracts do not depend on PostgreSQL-specific row types.
 
-The metadata should at minimum represent torrent infohash, job state, selected torrent file, source/output paths, completion/readiness, conversion state, and subtitle assets. Enforce a unique infohash. Torrent uploads are capped at 10 MiB and the aggregate content size advertised by a torrent is capped at 200 GiB by default; no host-wide disk quota is enforced. Reconcile missing/unreferenced files at startup and after cleanup.
+The metadata represents torrent infohash, job state, selected torrent file, source/output paths, completion/readiness, conversion state, and subtitle assets. Enforce a unique infohash. Torrent uploads are capped at 10 MiB and the aggregate content size advertised by a torrent is capped at 200 GiB by default; no host-wide disk quota is enforced.
+
+**Cutover:** The POC starts PostgreSQL with an empty database and does not migrate the existing SQLite records. The SQLite file and downloaded files are left untouched in the existing torrent-data volume. Re-uploading a torrent metadata file creates a fresh job and allows libtorrent to verify existing media payloads.
+
+The selected PostgreSQL image digest is `sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f`. PostgreSQL 19 was the latest stable major release on 2026-11-26. A public scan of this exact image digest reported no high/critical findings (the reachable finding was scored moderate); re-scan the image and update its digest before production use.
 
 ### 5.4 Media processing: FFmpeg as a constrained external worker
 
@@ -208,19 +215,17 @@ The API key is optional for startup but required to invoke the provider; configu
 ## 7. Acceptance gates
 
 1. Submitting the same torrent twice reuses one job and one stored asset, including after service restart.
-2. The selected file defaults to the largest supported video, and an explicit override is honored.
-3. Startup pieces receive higher priority; readiness remains false until the first 10 seconds are contiguous and playable.
+2. The selected file prefers browser-native MP4/WebM candidates, falls back to the largest supported video, and an explicit override is honored.
+3. Startup pieces receive higher priority; readiness remains false until the opening video frame is verified and playable.
 4. For direct playback, an unavailable requested byte range raises the corresponding piece priorities and waits for verified pieces; a bounded timeout returns a retryable result.
 5. Incomplete transcoded playback is sequential and non-seekable. Completed converted output supports correct HTTP range responses and seeking.
 6. Five subtitles total are downloaded for the requested language set, or the API reports a partial/provider failure without fabricating missing tracks.
 7. Host cleanup removes assets and matching metadata, handles active work safely, and can be run repeatedly.
-8. The local demo is not reachable as an unauthenticated service from outside the intended local environment.
+8. The UI never labels an incomplete job complete based on rounded progress, and the local demo is not reachable as an unauthenticated service from outside the intended local environment.
 
 ## 8. Open decisions and revisit triggers
 
 - **Subtitle provider and terms:** Decide after testing real search/download responses in all four languages and reviewing current API terms and quotas.
-- **Framework/runtime:** The repository does not yet establish a backend stack for this subsystem. Select it after confirming the wider project architecture; do not introduce a framework by habit.
-- **Torrent binding/build:** Select C++ or a supported language binding after a container build spike and current release/advisory review.
 - **Partial transcoding format:** Validate fragmented output, startup latency, and Chrome/Firefox playback with representative legal test files before treating the approach as settled.
 - **Request wait deadline and concurrency limits:** Set measurable values after observing download latency and frontend player retry behavior.
 - **Storage exhaustion policy:** Indefinite retention requires an operator capacity/cleanup policy before the POC runs for extended periods.
@@ -238,6 +243,10 @@ Revisit the design if the service becomes multi-user/public, needs multiple back
 - OpenSubtitles API capabilities: [OpenSubtitles API reference](https://ai.opensubtitles.com/api-docs)
 - FFmpeg muxer/output format options: [FFmpeg formats documentation](https://ffmpeg.org/ffmpeg-formats.html)
 - FFmpeg security fixes by release: [FFmpeg security page](https://ffmpeg.org/security.html)
+- PostgreSQL 19 release announcement: [PostgreSQL Global Development Group](https://www.postgresql.org/about/news/postgresql-19-released-3449/)
+- PostgreSQL official image: [Docker Hub](https://hub.docker.com/_/postgres/)
+- Exact PostgreSQL 19 Alpine image scan: [BaseImage report](https://baseimage.io/docker-security-scanner/report/postgres/19.0-alpine)
+- psycopg 3.3.9 vulnerability and maintenance status: [Snyk package report](https://security.snyk.io/package/pip/psycopg)
 - FastAPI package version: [PyPI](https://pypi.org/project/fastapi/); direct advisory summary: [Snyk](https://security.snyk.io/package/pip/fastapi)
 - Uvicorn package version: [PyPI](https://pypi.org/project/uvicorn/); direct advisory summary: [Snyk](https://security.snyk.io/package/pip/uvicorn)
 - libtorrent package version and wheels: [PyPI](https://pypi.org/project/libtorrent/); direct advisory summary: [Snyk](https://security.snyk.io/package/pip/libtorrent)

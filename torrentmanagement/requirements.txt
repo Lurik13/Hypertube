@@ -1,3 +1,4 @@
+# Direct and resolved transitive Python dependencies used by the API image.
 annotated-doc==0.0.7
 annotated-types==0.8.0
 anyio==4.16.0
@@ -9,6 +10,7 @@ idna==3.20
 opentelemetry-api==1.45.2
 pydantic==2.14.4
 pydantic-core==2.50.5
+psycopg==3.3.9
 starlette==1.10.0
 typing-extensions==4.16.0
 typing-inspection==0.4.5

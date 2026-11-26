@@ -1,3 +1,5 @@
+"""Transport-independent validation and selection rules for torrent media."""
+
 import re
 from pathlib import PurePosixPath
 from typing import Any
@@ -12,22 +14,31 @@ _RANGE_PATTERN = re.compile(r"bytes=(\d*)-(\d*)$")
 
 
 class InvalidTorrent(ValueError):
+    """Raised when torrent metadata violates a supported-media constraint."""
+
     pass
 
 
 class UnknownJob(LookupError):
+    """Raised when an operation references a missing torrent job."""
+
     pass
 
 
 class RangeNotSatisfiable(ValueError):
+    """Raised when an HTTP byte range cannot fit within the media file."""
+
     pass
 
 
 class RangeUnavailable(TimeoutError):
+    """Raised when requested torrent pieces fail to arrive before the deadline."""
+
     pass
 
 
 def validate_torrent_paths(paths: list[str]) -> None:
+    """Reject paths that could escape the per-torrent media directory."""
     for raw_path in paths:
         if not raw_path or "\\" in raw_path:
             raise InvalidTorrent("Torrent contains an invalid file path")
@@ -38,7 +49,13 @@ def validate_torrent_paths(paths: list[str]) -> None:
             raise InvalidTorrent("Torrent contains an unsafe file path")
 
 
-def choose_largest_video(files: list[dict[str, Any]]) -> int | None:
+def choose_preferred_video(files: list[dict[str, Any]]) -> int | None:
+    """Prefer direct-play containers, then the largest file within that tier.
+
+    The extension is only an inexpensive first-pass hint. The media service
+    still inspects codecs and confirms that the available prefix is playable
+    before enabling direct playback.
+    """
     candidates = [
         item
         for item in files
@@ -47,15 +64,24 @@ def choose_largest_video(files: list[dict[str, Any]]) -> int | None:
     ]
     if not candidates:
         return None
-    return max(candidates, key=lambda item: (item["size"], -item["index"]))["index"]
+    return max(
+        candidates,
+        key=lambda item: (
+            PurePosixPath(item["path"]).suffix.lower() in DIRECT_EXTENSIONS,
+            item["size"],
+            -item["index"],
+        ),
+    )["index"]
 
 
 def validate_torrent_content_size(files: list[dict[str, Any]], limit: int) -> None:
+    """Enforce the configured aggregate payload-size ceiling."""
     if limit <= 0 or sum(int(item["size"]) for item in files) > limit:
         raise InvalidTorrent("Torrent content exceeds the configured storage limit")
 
 
 def pieces_for_range(file_offset: int, start: int, end_inclusive: int, piece_size: int) -> range:
+    """Map a file-relative inclusive byte range to overlapping torrent pieces."""
     if file_offset < 0 or start < 0 or end_inclusive < start or piece_size <= 0:
         raise ValueError("Invalid byte range")
     first_piece = (file_offset + start) // piece_size
@@ -64,6 +90,7 @@ def pieces_for_range(file_offset: int, start: int, end_inclusive: int, piece_siz
 
 
 def parse_byte_range(header: str | None, file_size: int) -> tuple[int, int]:
+    """Parse one RFC-style byte range, rejecting unsupported multi-ranges."""
     if file_size <= 0:
         raise RangeNotSatisfiable("Empty media file")
     if header is None:
@@ -91,6 +118,7 @@ def parse_byte_range(header: str | None, file_size: int) -> tuple[int, int]:
 
 
 def subtitle_languages(values: list[str] | None) -> list[str]:
+    """Normalize and validate a deduplicated set of supported subtitle languages."""
     selected = [value.lower() for value in (values or sorted(SUBTITLE_LANGUAGES))]
     if not selected or len(selected) > len(SUBTITLE_LANGUAGES):
         raise ValueError("Choose between one and four subtitle languages")
@@ -100,4 +128,5 @@ def subtitle_languages(values: list[str] | None) -> list[str]:
 
 
 def is_direct_extension(path: str) -> bool:
+    """Return whether a filename is a candidate for browser-native delivery."""
     return PurePosixPath(path).suffix.lower() in DIRECT_EXTENSIONS

@@ -1,3 +1,4 @@
+# Keep host secrets, media, and interpreter artifacts out of build contexts.
 .env
 .git
 data/

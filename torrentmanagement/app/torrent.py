@@ -14,7 +14,7 @@ from app.domain import (
     InvalidTorrent,
     RangeUnavailable,
     UnknownJob,
-    choose_largest_video,
+    choose_preferred_video,
     pieces_for_range,
     validate_torrent_content_size,
     validate_torrent_paths,
@@ -22,7 +22,10 @@ from app.domain import (
 
 
 class TorrentManager:
+    """Own libtorrent handles and persistent download progress for each job."""
+
     def __init__(self, settings: Settings, repository: Repository) -> None:
+        """Create a session configured for the local POC's torrent workflow."""
         self.settings = settings
         self.repository = repository
         self.session = lt.session()
@@ -42,6 +45,7 @@ class TorrentManager:
 
     @staticmethod
     def _infohash(info: Any) -> str:
+        """Return the usable v1 or v2 infohash from parsed metadata."""
         hashes = info.info_hashes()
         v1 = hashes.v1.to_string()
         if any(v1):
@@ -53,6 +57,7 @@ class TorrentManager:
 
     @staticmethod
     def _file_records(info: Any) -> list[dict[str, Any]]:
+        """Extract indexed paths, sizes, and torrent offsets after validation."""
         storage = info.files()
         paths = [storage.file_path(index) for index in range(storage.num_files())]
         validate_torrent_paths(paths)
@@ -67,6 +72,7 @@ class TorrentManager:
         ]
 
     def start(self) -> None:
+        """Restore active jobs and launch the background status monitor."""
         self.settings.initialize_directories()
         self._restore_active_jobs()
         self._monitor = threading.Thread(
@@ -77,12 +83,14 @@ class TorrentManager:
         self._monitor.start()
 
     def stop(self) -> None:
+        """Stop the monitor and pause the torrent session during shutdown."""
         self._stop.set()
         if self._monitor is not None:
             self._monitor.join(timeout=3)
         self.session.pause()
 
     def _restore_active_jobs(self) -> None:
+        """Reattach persisted active jobs and restore each selected file."""
         for job in self.repository.list_jobs():
             if job["state"] not in {"queued", "downloading", "streamable"}:
                 continue
@@ -98,13 +106,14 @@ class TorrentManager:
                 self._apply_selection(job, info, int(job["selected_file_index"]))
 
     def add_torrent(self, temporary_path: Path) -> tuple[dict[str, Any], bool]:
+        """Validate uploaded metadata and create or reuse an infohash job."""
         try:
             info = lt.torrent_info(str(temporary_path))
         except RuntimeError as error:
             raise InvalidTorrent("The uploaded file is not valid torrent metadata") from error
         files = self._file_records(info)
         validate_torrent_content_size(files, self.settings.max_torrent_content_bytes)
-        selected_index = choose_largest_video(files)
+        selected_index = choose_preferred_video(files)
         if selected_index is None:
             raise InvalidTorrent("Torrent does not contain a supported video file")
 
@@ -151,6 +160,7 @@ class TorrentManager:
             return self.repository.get_job(job["id"]) or job, False
 
     def _attach(self, job: dict[str, Any], info: Any) -> tuple[Any, Any]:
+        """Attach a torrent paused, with every file initially deselected."""
         params = lt.add_torrent_params()
         params.ti = info
         params.save_path = job["download_dir"]
@@ -162,6 +172,7 @@ class TorrentManager:
         return handle, info
 
     def _runtime(self, job_id: str) -> tuple[Any, Any]:
+        """Return or lazily reconstruct a live handle for a persisted job."""
         with self._lock:
             runtime = self._handles.get(job_id)
         if runtime is None:
@@ -173,13 +184,14 @@ class TorrentManager:
         return runtime
 
     def select_file(self, job_id: str, file_index: int) -> dict[str, Any]:
+        """Validate and activate an explicit file choice from torrent metadata."""
         job = self.repository.get_job(job_id)
         if job is None:
             raise UnknownJob("Torrent job was not found")
         selected = next(
             (item for item in job["files"] if item["index"] == file_index), None
         )
-        if selected is None or choose_largest_video([selected]) is None:
+        if selected is None or choose_preferred_video([selected]) is None:
             raise InvalidTorrent("Selected file is not a supported video")
         selected["direct"] = PurePosixPath(selected["path"]).suffix.lower() in {
             ".mp4",
@@ -197,6 +209,7 @@ class TorrentManager:
         *,
         handle: Any | None = None,
     ) -> None:
+        """Prioritize the selected file and its first and last torrent pieces."""
         if handle is None:
             handle, _ = self._runtime(job["id"])
         files = job["files"]
@@ -224,6 +237,7 @@ class TorrentManager:
         self.repository.select_file(job["id"], selected)
 
     def get_job(self, job_id: str) -> dict[str, Any]:
+        """Refresh persisted progress and mark completion only at full file size."""
         job = self.repository.get_job(job_id)
         if job is None:
             raise UnknownJob("Torrent job was not found")
@@ -246,14 +260,17 @@ class TorrentManager:
         return self.repository.get_job(job_id) or job
 
     def mark_streamable(self, job_id: str) -> None:
+        """Record that the selected media prefix passed readiness checks."""
         self.repository.update_status(job_id, state="streamable")
 
     def _piece_available(self, handle: Any, piece: int) -> bool:
+        """Check whether the torrent engine has verified a particular piece."""
         return bool(handle.have_piece(piece))
 
     def has_byte_range(
         self, job_id: str, file_index: int, start: int, end_inclusive: int
     ) -> bool:
+        """Check that every torrent piece overlapping a byte range is present."""
         job = self.repository.get_job(job_id)
         if job is None:
             raise UnknownJob("Torrent job was not found")
@@ -277,6 +294,7 @@ class TorrentManager:
         end_inclusive: int,
         timeout: float,
     ) -> None:
+        """Raise missing-piece priorities and wait up to the supplied deadline."""
         job = self.repository.get_job(job_id)
         if job is None:
             raise UnknownJob("Torrent job was not found")
@@ -301,6 +319,7 @@ class TorrentManager:
         raise RangeUnavailable("Requested media bytes are not available yet")
 
     def media_path(self, job_id: str, file_index: int | None = None) -> Path:
+        """Resolve a validated torrent path beneath its download directory."""
         job = self.repository.get_job(job_id)
         if job is None:
             raise UnknownJob("Torrent job was not found")
@@ -324,6 +343,7 @@ class TorrentManager:
     def iter_file_bytes(
         self, job_id: str, file_index: int, start: int, end_inclusive: int
     ) -> Iterator[bytes]:
+        """Yield verified media bytes while waiting for each bounded chunk."""
         path = self.media_path(job_id, file_index)
         current = start
         while current <= end_inclusive:
@@ -347,6 +367,7 @@ class TorrentManager:
             current = chunk_end + 1
 
     def _monitor_jobs(self) -> None:
+        """Refresh active job progress periodically without blocking API calls."""
         while not self._stop.wait(1):
             for job in self.repository.list_jobs():
                 if job["state"] not in {"queued", "downloading", "streamable"}:

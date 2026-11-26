@@ -1,3 +1,4 @@
+/* Global palette, typography, and shared focus treatment. */
 :root {
   color-scheme: dark;
   --page: #101317;
@@ -17,6 +18,7 @@
   box-sizing: border-box;
 }
 
+/* Base layout and interactive controls. */
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -58,6 +60,7 @@ input[type="checkbox"],
   border-bottom: 1px solid rgb(255 255 255 / 7%);
 }
 
+/* Brand and locally scoped deployment badge. */
 .brand {
   display: inline-flex;
   align-items: center;
@@ -109,6 +112,7 @@ input[type="checkbox"],
   box-shadow: 0 0 0.7rem rgb(196 240 107 / 55%);
 }
 
+/* Introductory copy and responsive content width. */
 main {
   width: min(1120px, calc(100% - 2rem));
   margin: 0 auto;
@@ -156,6 +160,7 @@ h1 {
   gap: 1rem;
 }
 
+/* Shared cards, step labels, and muted helper text. */
 .card {
   border: 1px solid var(--border);
   border-radius: 1.1rem;
@@ -207,6 +212,7 @@ h1 {
   font-size: 0.78rem;
 }
 
+/* Upload controls retain visible focus and keyboard-operable input. */
 code {
   border: 1px solid var(--border);
   border-radius: 0.35rem;
@@ -264,6 +270,7 @@ code {
   font-weight: 800;
 }
 
+/* Primary and secondary actions share motion and disabled-state behavior. */
 .button {
   display: inline-flex;
   min-height: 2.8rem;
@@ -302,6 +309,7 @@ code {
   background: #222b1b;
 }
 
+/* Job list and completion progress indicators. */
 .count-badge {
   justify-content: center;
   min-width: 2rem;
@@ -352,8 +360,11 @@ code {
 }
 
 .job-state {
+  max-width: 15rem;
+  overflow-wrap: anywhere;
   color: var(--muted);
   font-size: 0.72rem;
+  text-align: right;
   text-transform: capitalize;
 }
 
@@ -387,6 +398,7 @@ progress::-moz-progress-bar {
   background: var(--accent);
 }
 
+/* Player, selected-file controls, and status display. */
 .player-card {
   margin: 1rem 0 3rem;
   padding: clamp(1rem, 3vw, 1.6rem);
@@ -460,9 +472,15 @@ input[type="text"] {
 .progress-label {
   display: flex;
   justify-content: space-between;
+  gap: 0.75rem;
   margin-top: 0.5rem;
   color: var(--muted);
   font-size: 0.73rem;
+}
+
+.progress-label span:last-child {
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .hash {
@@ -472,6 +490,7 @@ input[type="text"] {
   font-size: 0.68rem;
 }
 
+/* Subtitle search controls and result list. */
 #subtitle-form {
   display: grid;
   gap: 0.55rem;
@@ -521,6 +540,7 @@ legend {
   font-size: 0.74rem;
 }
 
+/* Announce errors and success without changing the page layout. */
 .notice {
   border: 1px solid var(--border);
   border-radius: 0.7rem;
@@ -545,6 +565,7 @@ legend {
   font-size: 0.72rem;
 }
 
+/* Keep the player and job library usable on narrow screens. */
 @media (max-width: 760px) {
   .workspace,
   .player-layout {
@@ -566,6 +587,7 @@ legend {
   }
 }
 
+/* Respect the operating system's reduced-motion preference. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

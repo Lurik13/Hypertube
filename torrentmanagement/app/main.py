@@ -1,3 +1,5 @@
+"""HTTP routes and FastAPI lifecycle for the local Torrentmanagement POC."""
+
 import asyncio
 import os
 import tempfile
@@ -28,7 +30,7 @@ from app.torrent import TorrentManager
 
 settings = Settings.from_environment()
 settings.initialize_directories()
-repository = Repository(settings.data_dir / "torrentmanagement.sqlite3")
+repository = Repository(settings)
 torrents = TorrentManager(settings, repository)
 media = MediaService(settings, repository, torrents)
 subtitles = SubDLProvider(settings, repository)
@@ -37,6 +39,7 @@ STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Start torrent workers only after PostgreSQL is healthy."""
     torrents.start()
     yield
     torrents.stop()
@@ -54,10 +57,14 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 class SelectionRequest(BaseModel):
+    """Validate a torrent-relative video file index from the UI."""
+
     file_index: int = Field(ge=0)
 
 
 class SubtitleSearchRequest(BaseModel):
+    """Constrain subtitle search inputs to the POC's supported languages."""
+
     title: str = Field(min_length=1, max_length=200)
     languages: list[str] = Field(
         default_factory=lambda: ["en", "fr", "de", "it"],
@@ -67,6 +74,7 @@ class SubtitleSearchRequest(BaseModel):
 
 
 def _public_job(job: dict[str, Any]) -> dict[str, Any]:
+    """Build the API-safe job representation without exposing storage paths."""
     files = [
         {
             "index": item["index"],
@@ -95,6 +103,7 @@ def _public_job(job: dict[str, Any]) -> dict[str, Any]:
 
 
 def _get_job(job_id: str) -> dict[str, Any]:
+    """Resolve a known job or translate the domain error to HTTP 404."""
     try:
         return torrents.get_job(job_id)
     except UnknownJob as error:
@@ -102,6 +111,7 @@ def _get_job(job_id: str) -> dict[str, Any]:
 
 
 def _disk_chunks(path: Path, start: int, end_inclusive: int) -> Iterator[bytes]:
+    """Yield a stored media interval without loading it into memory at once."""
     remaining = end_inclusive - start + 1
     with path.open("rb") as media_file:
         media_file.seek(start)
@@ -116,6 +126,7 @@ def _disk_chunks(path: Path, start: int, end_inclusive: int) -> Iterator[bytes]:
 def _range_headers(
     start: int, end_inclusive: int, total_size: int, *, partial: bool
 ) -> dict[str, str]:
+    """Set exact byte-range headers for the requested interval."""
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(end_inclusive - start + 1),
@@ -129,16 +140,19 @@ def _range_headers(
 
 @app.get("/")
 def index() -> FileResponse:
+    """Serve the single-page local demo."""
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/api/health")
 def health() -> dict[str, str]:
+    """Expose a lightweight process health check."""
     return {"status": "ok"}
 
 
 @app.get("/api/torrents")
 def list_torrents() -> dict[str, list[dict[str, Any]]]:
+    """List current download jobs and refresh their torrent progress."""
     return {
         "items": [
             _public_job(torrents.get_job(job["id"]))
@@ -152,6 +166,7 @@ async def upload_torrent(
     request: Request,
     content_length: str | None = Header(default=None),
 ) -> JSONResponse:
+    """Stream a bounded raw torrent upload to disk and create/reuse its job."""
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
     if content_type not in {"application/x-bittorrent", "application/octet-stream"}:
         raise HTTPException(
@@ -196,11 +211,13 @@ async def upload_torrent(
 
 @app.get("/api/torrents/{job_id}")
 def get_torrent(job_id: str) -> dict[str, Any]:
+    """Return one job's current download and playback state."""
     return _public_job(_get_job(job_id))
 
 
 @app.put("/api/torrents/{job_id}/selection")
 def select_video(job_id: str, selection: SelectionRequest) -> dict[str, Any]:
+    """Apply a validated user-selected media file to the torrent job."""
     _get_job(job_id)
     try:
         job = torrents.select_file(job_id, selection.file_index)
@@ -211,6 +228,7 @@ def select_video(job_id: str, selection: SelectionRequest) -> dict[str, Any]:
 
 @app.get("/api/torrents/{job_id}/readiness")
 def get_readiness(job_id: str) -> dict[str, Any]:
+    """Report readiness independently from download completion."""
     _get_job(job_id)
     try:
         result = media.readiness(job_id)
@@ -221,6 +239,7 @@ def get_readiness(job_id: str) -> dict[str, Any]:
 
 @app.get("/api/torrents/{job_id}/stream")
 async def stream_media(job_id: str, request: Request) -> StreamingResponse:
+    """Stream direct ranges, sequential partial output, or completed conversion."""
     job = _get_job(job_id)
     readiness = media.readiness(job_id)
     if not readiness.get("ready"):
@@ -245,6 +264,7 @@ async def stream_media(job_id: str, request: Request) -> StreamingResponse:
             ) from error
 
         def partial_chunks() -> Iterator[bytes]:
+            """Release the transcoder process even if the client disconnects."""
             try:
                 yield from partial
             finally:
@@ -330,6 +350,7 @@ async def stream_media(job_id: str, request: Request) -> StreamingResponse:
 def download_subtitles(
     job_id: str, payload: SubtitleSearchRequest
 ) -> dict[str, Any]:
+    """Search and store up to five subtitles for the selected languages."""
     _get_job(job_id)
     try:
         languages = subtitle_languages(payload.languages)
@@ -350,6 +371,7 @@ def download_subtitles(
 
 @app.get("/api/torrents/{job_id}/subtitles")
 def list_subtitles(job_id: str) -> dict[str, list[dict[str, Any]]]:
+    """List subtitle records available to the job's player."""
     _get_job(job_id)
     return {
         "items": [
@@ -367,6 +389,7 @@ def list_subtitles(job_id: str) -> dict[str, list[dict[str, Any]]]:
 
 @app.get("/api/subtitles/{subtitle_id}")
 def get_subtitle(subtitle_id: str) -> FileResponse:
+    """Serve one validated subtitle asset from the managed storage tree."""
     path = subtitles.asset_path(subtitle_id)
     if path is None or not path.is_file():
         raise HTTPException(status_code=404, detail="Subtitle file was not found")

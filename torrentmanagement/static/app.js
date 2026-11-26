@@ -1,3 +1,4 @@
+/** Browser-side state and event handlers for the local torrent workflow. */
 const notice = document.querySelector("#notice");
 const jobsList = document.querySelector("#jobs-list");
 const playerPanel = document.querySelector("#player-panel");
@@ -9,12 +10,14 @@ let selectedJobId = null;
 let currentSubtitleIds = new Set();
 
 function showNotice(message, kind = "info") {
+  /** Present API, validation, and operation feedback accessibly. */
   notice.textContent = message;
   notice.dataset.kind = kind;
   notice.hidden = !message;
 }
 
 async function api(url, options = {}) {
+  /** Decode the JSON API response and turn HTTP failures into UI errors. */
   const response = await fetch(url, options);
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
@@ -26,10 +29,12 @@ async function api(url, options = {}) {
 }
 
 function displayName(job) {
+  /** Prefer the selected media path, then the candidate file, then its hash. */
   return job.selected_file_path || job.files.find((file) => file.selected)?.path || job.infohash;
 }
 
 function formatBytes(bytes) {
+  /** Convert a non-negative byte count to a compact user-facing unit. */
   if (!Number.isFinite(bytes) || bytes < 0) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
   let value = bytes;
@@ -41,7 +46,27 @@ function formatBytes(bytes) {
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
+function progressPercent(job) {
+  /** Keep rounded progress below 100 until the backend confirms completion. */
+  if (job.state === "complete") return 100;
+  const rawPercent = Math.round(Math.max(0, Math.min(1, job.progress || 0)) * 1000) / 10;
+  return Math.min(rawPercent, 99.9);
+}
+
+function downloadStatus(job) {
+  /** Describe lifecycle state explicitly instead of inferring it from a bar. */
+  const percent = progressPercent(job).toFixed(1);
+  if (job.state === "complete") return "Download complete · 100%";
+  if (job.state === "failed") return `Download failed · ${percent}%`;
+  if (job.state === "queued") return `Queued to download · ${percent}%`;
+  if (job.state === "streamable") {
+    return `Playable while still downloading · ${percent}%`;
+  }
+  return `Still downloading · ${percent}%`;
+}
+
 function renderJobs() {
+  /** Render each job with an explicit completion state and accessible progress. */
   document.querySelector("#job-count").textContent = String(jobs.length);
   jobsList.replaceChildren();
   if (jobs.length === 0) {
@@ -65,13 +90,13 @@ function renderJobs() {
 
     const state = document.createElement("span");
     state.className = "job-state";
-    state.textContent = job.state.replaceAll("_", " ");
+    state.textContent = downloadStatus(job);
 
     const progress = document.createElement("progress");
     progress.className = "job-progress";
     progress.max = 1;
     progress.value = Math.max(0, Math.min(1, job.progress || 0));
-    progress.setAttribute("aria-label", `Download progress: ${Math.round(progress.value * 100)} percent`);
+    progress.setAttribute("aria-label", downloadStatus(job));
 
     button.append(name, state, progress);
     jobsList.append(button);
@@ -79,6 +104,7 @@ function renderJobs() {
 }
 
 function selectJob(jobId) {
+  /** Reset media and subtitle state before switching the selected job. */
   selectedJobId = jobId;
   currentSubtitleIds = new Set();
   player.removeAttribute("src");
@@ -90,6 +116,7 @@ function selectJob(jobId) {
 }
 
 function renderSelectedJob() {
+  /** Render selected-file controls, download status, readiness, and player URL. */
   const job = jobs.find((item) => item.id === selectedJobId);
   if (!job) {
     playerPanel.hidden = true;
@@ -98,10 +125,10 @@ function renderSelectedJob() {
   playerPanel.hidden = false;
   document.querySelector("#player-heading").textContent = displayName(job);
   document.querySelector("#torrent-hash").textContent = `Infohash · ${job.infohash}`;
-  document.querySelector("#progress-value").textContent = `${Math.round((job.progress || 0) * 100)}%`;
+  document.querySelector("#progress-value").textContent = downloadStatus(job);
   const progress = document.querySelector("#download-progress");
   progress.value = Math.max(0, Math.min(1, job.progress || 0));
-  progress.setAttribute("aria-label", `Download progress: ${Math.round(progress.value * 100)} percent`);
+  progress.setAttribute("aria-label", downloadStatus(job));
 
   const selectedIndex = String(job.selected_file_index ?? "");
   const existingOptions = Array.from(videoSelect.options).map((option) => `${option.value}:${option.textContent}`);
@@ -121,7 +148,7 @@ function renderSelectedJob() {
 
   const statePill = document.querySelector("#playback-state");
   statePill.dataset.state = job.state;
-  statePill.textContent = job.state.replaceAll("_", " ");
+  statePill.textContent = downloadStatus(job);
 
   const readiness = job._readiness;
   const readinessCopy = document.querySelector("#readiness-copy");
@@ -136,7 +163,7 @@ function renderSelectedJob() {
   } else if (job.state === "complete" && job.conversion_state === "running") {
     readinessCopy.textContent = "Download complete · preparing a browser-compatible version.";
   } else {
-    readinessCopy.textContent = "Waiting for a playable opening. The first ten seconds must be verified.";
+    readinessCopy.textContent = "Waiting for a decodable opening frame and required container metadata.";
   }
 
   const streamUrl = `/api/torrents/${encodeURIComponent(job.id)}/stream`;
@@ -154,6 +181,7 @@ function renderSelectedJob() {
 }
 
 async function refreshJobs() {
+  /** Poll job state and readiness without treating rounded progress as done. */
   try {
     const data = await api("/api/torrents");
     jobs = data.items;
@@ -179,6 +207,7 @@ async function refreshJobs() {
 }
 
 async function refreshSubtitles(jobId) {
+  /** Synchronize locally available subtitle tracks with the video element. */
   try {
     const data = await api(`/api/torrents/${encodeURIComponent(jobId)}/subtitles`);
     const list = document.querySelector("#subtitle-list");
@@ -202,11 +231,13 @@ async function refreshSubtitles(jobId) {
 }
 
 document.querySelector("#torrent-file").addEventListener("change", (event) => {
+  /** Reflect the file chosen for the next torrent upload. */
   const file = event.currentTarget.files?.[0];
   document.querySelector("#file-label").textContent = file?.name || "Choose a .torrent file";
 });
 
 document.querySelector("#upload-form").addEventListener("submit", async (event) => {
+  /** Upload raw torrent metadata and select the returned or reused job. */
   event.preventDefault();
   const file = document.querySelector("#torrent-file").files?.[0];
   if (!file) {
@@ -232,6 +263,7 @@ document.querySelector("#upload-form").addEventListener("submit", async (event) 
 });
 
 videoSelect.addEventListener("change", async () => {
+  /** Apply an explicit file choice and refresh its download/readiness state. */
   if (!selectedJobId || videoSelect.value === "") return;
   try {
     await api(`/api/torrents/${encodeURIComponent(selectedJobId)}/selection`, {
@@ -250,6 +282,7 @@ videoSelect.addEventListener("change", async () => {
 });
 
 document.querySelector("#subtitle-form").addEventListener("submit", async (event) => {
+  /** Search and download subtitle tracks for the chosen languages. */
   event.preventDefault();
   if (!selectedJobId) return;
   const title = document.querySelector("#subtitle-title").value.trim();

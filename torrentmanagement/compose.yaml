@@ -1,6 +1,31 @@
+# PostgreSQL is private to the Compose network; only the API port is published.
 name: hypertube-torrentmanagement
 
 services:
+  # Durable metadata store, initialized with a restricted application role.
+  postgres:
+    image: postgres:19-alpine@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
+    environment:
+      POSTGRES_DB: ${TM_DB_NAME:?Set TM_DB_NAME in .env}
+      POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD:?Set POSTGRES_SUPERUSER_PASSWORD in .env}
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      PGDATA: /var/lib/postgresql/19/docker
+      TM_DB_USER: ${TM_DB_USER:?Set TM_DB_USER in .env}
+      TM_DB_PASSWORD: ${TM_DB_PASSWORD:?Set TM_DB_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql
+      - ./scripts/01-create-app-user.sql:/docker-entrypoint-initdb.d/01-create-app-user.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
   torrentmanagement:
     image: hypertube-torrentmanagement:poc
     build:
@@ -9,6 +34,12 @@ services:
       - "127.0.0.1:${TM_HOST_PORT:-8000}:8000"
     environment:
       TM_DATA_DIR: /data
+      TM_DB_HOST: postgres
+      TM_DB_PORT: 5432
+      TM_DB_NAME: ${TM_DB_NAME:?Set TM_DB_NAME in .env}
+      TM_DB_USER: ${TM_DB_USER:?Set TM_DB_USER in .env}
+      TM_DB_PASSWORD: ${TM_DB_PASSWORD:?Set TM_DB_PASSWORD in .env}
+      TM_DB_CONNECT_TIMEOUT: ${TM_DB_CONNECT_TIMEOUT:-5}
       TM_MAX_TORRENT_BYTES: ${TM_MAX_TORRENT_BYTES:-10485760}
       TM_MAX_TORRENT_CONTENT_BYTES: ${TM_MAX_TORRENT_CONTENT_BYTES:-214748364800}
       TM_RANGE_CHUNK_BYTES: ${TM_RANGE_CHUNK_BYTES:-1048576}
@@ -17,6 +48,9 @@ services:
       SUBDL_API_KEY: ${SUBDL_API_KEY:-}
     volumes:
       - torrent-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     init: true
     restart: unless-stopped
     read_only: true
@@ -28,4 +62,6 @@ services:
       - no-new-privileges:true
 
 volumes:
+  # Separate persistent volumes keep downloaded media and relational data distinct.
+  postgres-data:
   torrent-data:

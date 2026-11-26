@@ -1,5 +1,8 @@
+# Local-only configuration and credentials.
 .env
+# Runtime downloads, generated media, and database artifacts.
 data/
+# Python bytecode and local test caches.
 __pycache__/
 *.py[cod]
 .pytest_cache/

@@ -1,3 +1,5 @@
+"""Probe, transcode, and serveability decisions for selected video files."""
+
 import json
 import os
 import select
@@ -19,10 +21,14 @@ _AUDIO_CODECS = {"aac", "mp3", "opus", "vorbis"}
 
 
 class MediaProcessingError(RuntimeError):
+    """Raised when FFmpeg cannot produce a valid media stream or output."""
+
     pass
 
 
 class PartialTranscode:
+    """Own an FFmpeg process streaming fragmented output from partial input."""
+
     def __init__(
         self,
         process: subprocess.Popen[bytes],
@@ -30,6 +36,7 @@ class PartialTranscode:
         first_chunk: bytes,
         semaphore: threading.BoundedSemaphore,
     ) -> None:
+        """Retain the process resources until streaming finishes or is cancelled."""
         self.process = process
         self.producer = producer
         self.first_chunk = first_chunk
@@ -37,6 +44,7 @@ class PartialTranscode:
         self._closed = False
 
     def __iter__(self) -> Iterator[bytes]:
+        """Yield FFmpeg output and surface non-zero process completion."""
         if self.first_chunk:
             yield self.first_chunk
         stream = self.process.stdout
@@ -54,6 +62,7 @@ class PartialTranscode:
         self.close()
 
     def close(self) -> None:
+        """Terminate remaining workers, close pipes, and free one stream slot."""
         if self._closed:
             return
         self._closed = True
@@ -73,12 +82,15 @@ class PartialTranscode:
 
 
 class MediaService:
+    """Coordinate FFprobe checks, browser compatibility, and conversions."""
+
     def __init__(
         self,
         settings: Settings,
         repository: Repository,
         torrents: TorrentManager,
     ) -> None:
+        """Bind media processing to runtime settings and torrent storage."""
         self.settings = settings
         self.repository = repository
         self.torrents = torrents
@@ -90,10 +102,12 @@ class MediaService:
 
     @staticmethod
     def converted_path(job_id: str, data_dir: Path) -> Path:
+        """Return the deterministic MP4 destination for a completed job."""
         return data_dir / "converted" / f"{job_id}.mp4"
 
     @staticmethod
     def _run_probe(path: Path, *, packets: bool) -> dict[str, Any] | None:
+        """Return bounded FFprobe metadata, or None when the source is unreadable."""
         entries = (
             "stream=index,codec_type,codec_name:"
             "packet=stream_index,pts_time,duration_time,pos,size:"
@@ -111,7 +125,7 @@ class MediaService:
             "json",
         ]
         if packets:
-            command.extend(["-read_intervals", "%+11"])
+            command.extend(["-read_intervals", "%+1"])
         command.append(str(path))
         try:
             result = subprocess.run(
@@ -132,6 +146,7 @@ class MediaService:
 
     @staticmethod
     def _is_browser_compatible(path: Path, probe: dict[str, Any]) -> bool:
+        """Check the container and every present audio/video codec."""
         extension = path.suffix.lower()
         streams = probe.get("streams", [])
         videos = [
@@ -159,54 +174,43 @@ class MediaService:
         return False
 
     def _prefix_is_playable(self, job: dict[str, Any], path: Path) -> bool:
+        """Require verified bytes for, and a successful decode of, one video frame."""
         piece_probe = self._run_probe(path, packets=True)
         if piece_probe is None:
             return False
         streams = piece_probe.get("streams", [])
-        media_streams = {
-            int(item["index"]): item.get("codec_type")
+        video_streams = {
+            int(item["index"])
             for item in streams
-            if item.get("codec_type") in {"video", "audio"} and "index" in item
+            if item.get("codec_type") == "video" and "index" in item
         }
-        packets = [
+        video_packets = [
             packet
             for packet in piece_probe.get("packets", [])
-            if int(packet.get("stream_index", -1)) in media_streams
+            if int(packet.get("stream_index", -1)) in video_streams
         ]
-        if not packets:
+        if not video_packets:
             return False
-        positioned: list[tuple[float, float, int, int]] = []
-        for packet in packets:
+        positioned: list[tuple[float, int, int]] = []
+        for packet in video_packets:
             try:
                 start = float(packet["pts_time"])
-                duration = float(packet.get("duration_time", "0"))
                 position = int(packet["pos"])
                 size = int(packet["size"])
             except (KeyError, TypeError, ValueError):
                 return False
             if position < 0 or size <= 0:
                 return False
-            positioned.append((start, start + max(duration, 0), position, size))
-        target_seconds = 10.0
-        format_info = piece_probe.get("format", {})
-        try:
-            duration_seconds = float(format_info.get("duration", target_seconds))
-        except (TypeError, ValueError):
-            duration_seconds = target_seconds
-        target_seconds = min(target_seconds, duration_seconds)
-        if target_seconds <= 0:
-            return False
-        relevant = [item for item in positioned if item[0] < target_seconds]
-        if not relevant or min(item[0] for item in relevant) > 0.1:
-            return False
-        if max(item[1] for item in relevant) < target_seconds:
+            positioned.append((start, position, size))
+        first_video_packet = min(positioned, key=lambda item: item[0])
+        if first_video_packet[0] > 0.1:
             return False
         file_index = int(job["selected_file_index"])
-        for _, _, position, size in relevant:
-            if not self.torrents.has_byte_range(
-                job["id"], file_index, position, position + size - 1
-            ):
-                return False
+        _, position, size = first_video_packet
+        if not self.torrents.has_byte_range(
+            job["id"], file_index, position, position + size - 1
+        ):
+            return False
         decode_command = [
             "ffmpeg",
             "-nostdin",
@@ -215,12 +219,10 @@ class MediaService:
             "-xerror",
             "-i",
             str(path),
-            "-t",
-            str(target_seconds),
+            "-frames:v",
+            "1",
             "-map",
             "0:v:0",
-            "-map",
-            "0:a?",
             "-f",
             "null",
             "-",
@@ -239,6 +241,7 @@ class MediaService:
         return True
 
     def readiness(self, job_id: str) -> dict[str, Any]:
+        """Report direct, partial, or completed-conversion readiness."""
         job = self.torrents.get_job(job_id)
         if job["selected_file_index"] is None:
             return {"ready": False, "reason": "no_video_selected"}
@@ -321,6 +324,7 @@ class MediaService:
         }
 
     def _queue_conversion(self, job_id: str, source: Path, destination: Path) -> None:
+        """Start at most one background conversion worker per job."""
         with self._conversion_lock:
             if job_id in self._conversions:
                 return
@@ -335,6 +339,7 @@ class MediaService:
         thread.start()
 
     def _convert_completed(self, job_id: str, source: Path, destination: Path) -> None:
+        """Remux or transcode a complete source, then atomically publish output."""
         temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
         self.repository.set_conversion_state(job_id, "running")
         try:
@@ -426,6 +431,7 @@ class MediaService:
                 self._conversions.discard(job_id)
 
     def open_partial_transcode(self, job: dict[str, Any]) -> PartialTranscode:
+        """Start the bounded sequential transcoder supported for partial MKV/WebM."""
         source = self.torrents.media_path(job["id"])
         if source.suffix.lower() not in {".mkv", ".webm"}:
             raise RangeUnavailable("This source requires complete download before conversion")
@@ -480,6 +486,7 @@ class MediaService:
             raise MediaProcessingError("FFmpeg did not open its media pipes")
 
         def feed_source() -> None:
+            """Feed verified source chunks to FFmpeg while respecting piece waits."""
             try:
                 for block in self.torrents.iter_file_bytes(
                     job["id"],
