@@ -1,5 +1,6 @@
-# hypertube
+# Hypertube 42
 
+### Roles 
 - Lurik13: Responsable du front
 - Gkubina: Gestion de toute la logique torrent
 - lumingoprogramming: Gestion de tout ce qui touche aux users (back + aide au front)
@@ -101,3 +102,51 @@ KoganeShiro + Gkubina apres avoir fini leur partie -> Agregateur de bases (IMDB 
 
 #### Platform
 - [ ] Have an admin dashboard to monitor the webapp
+
+
+---
+### Architecture of the project 
+
+micro architecture
+```
+.
+├── docker-compose.yml
+├── .env.example
+├── .gitignore                    # .env, data/, certs, node_modules...
+├── .dockerignore
+├── Makefile                      # up, down, logs, migrate, test, lint, clean
+├── README.md
+│
+├── frontend/                     # React + TypeScript
+│   ├── Dockerfile                # multi-stage: build with Node, serve static files
+│   ├── index.html
+│   ├── public/
+│   │   └── locales/              # i18next: en/, fr/ ... translation.json
+│   └── src/                      # routes, fetch client, TanStack Query hooks Header, Footer, MovieCard, Player, Login, Register, Library, Movie,  useAuth, useInfiniteMovies... i18next config
+│
+├── backend/
+│   ├── Dockerfile                # one image, used by api AND worker (different command)
+│   ├── requirements.txt
+│   ├── app/                      # FastAPI
+│   │   ├── routers/              # auth, users, movies, comments, oauth, stream
+│   │   ├── services/             # omdb/tmdb, sources etc...
+│   ├── worker/                   # Torrents
+│   └── tests/
+│       ├── api/
+│       └── worker/
+│
+├── nginx/
+│   ├── nginx.conf
+│   ├── conf.d/default.conf       # proxy /api, static front, range requests
+│   └── certs/                    # self-signed for dev (gitignored)
+│
+├── monitoring/
+│   ├── prometheus/
+│   ├── grafana/
+├── scripts/                      # init-db, seed, generate-certs.sh, backup
+├── docs/                         # subject PDF, database-schema.md, features checklist
+└── data/                         # dev only, gitignored (media volume, db dumps)
+```
+
+### Getting started
+
