@@ -1,2 +1,7 @@
 .env
 .vscode
+data/
+nginx/certs/
+__pycache__/
+*.pyc
+.pytest_cache/

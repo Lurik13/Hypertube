@@ -1,0 +1,151 @@
+name: hypertube
+
+# Settings shared by every service built from ./back (api, worker, tests).
+x-backend-env: &backend-env
+  DATABASE_URL: postgresql+psycopg://${APP_DB_USER:?Set APP_DB_USER in .env}:${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}@db:5432/${POSTGRES_DB:?Set POSTGRES_DB in .env}
+  SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+  FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+  PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8000}
+  COOKIE_SECURE: ${COOKIE_SECURE:-true}
+  SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-168}
+  PASSWORD_RESET_TTL_MINUTES: ${PASSWORD_RESET_TTL_MINUTES:-30}
+  MAIL_FROM: ${MAIL_FROM:-Hypertube <no-reply@hypertube.local>}
+  SMTP_HOST: ${SMTP_HOST:-mailpit}
+  SMTP_PORT: ${SMTP_PORT:-1025}
+  SMTP_USERNAME: ${SMTP_USERNAME:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_STARTTLS: ${SMTP_STARTTLS:-false}
+  FORTYTWO_CLIENT_ID: ${FORTYTWO_CLIENT_ID:-}
+  FORTYTWO_CLIENT_SECRET: ${FORTYTWO_CLIENT_SECRET:-}
+  GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+  GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+  BROKER_URL: redis://valkey:6379/0
+  MEDIA_ROOT: /data/media
+  MOVIE_RETENTION_DAYS: ${MOVIE_RETENTION_DAYS:-30}
+  CLEANUP_INTERVAL_MINUTES: ${CLEANUP_INTERVAL_MINUTES:-60}
+
+x-hardening: &hardening
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m,noexec,nosuid
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  # PostgreSQL is only reachable inside the Compose network (use `make psql`).
+  db:
+    image: postgres:17.12-trixie
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      # Passwords required for every connection, including local ones.
+      POSTGRES_INITDB_ARGS: --auth-local=scram-sha-256 --auth-host=scram-sha-256
+      # Read by scripts/init-db to create the restricted role the app uses.
+      APP_DB_USER: ${APP_DB_USER:?Set APP_DB_USER in .env}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:?Set APP_DB_PASSWORD in .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/init-db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # Broker for Celery jobs (cleanup now, torrents later). Not a source of truth.
+  valkey:
+    image: valkey/valkey:8.1.12-alpine
+    command: ["valkey-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # Catches every outgoing email in dev: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:v1.34.0
+    ports:
+      - "127.0.0.1:${MAILPIT_HOST_PORT:-8025}:8025"
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # FastAPI. The entrypoint applies migrations before starting uvicorn.
+  api:
+    build:
+      context: ./back
+      target: runtime
+    image: hypertube-back
+    environment:
+      <<: *backend-env
+      RUN_MIGRATIONS: "1"
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+    volumes:
+      - media:/data/media
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    init: true
+    restart: unless-stopped
+    <<: *hardening
+
+  # Celery worker with the embedded beat scheduler for periodic jobs.
+  worker:
+    build:
+      context: ./back
+      target: runtime
+    image: hypertube-back
+    command: ["celery", "-A", "app.worker:celery_app", "worker", "--beat",
+              "--schedule", "/tmp/celerybeat-schedule", "--loglevel", "INFO",
+              "--concurrency", "2", "--without-mingle", "--without-gossip"]
+    environment:
+      <<: *backend-env
+    volumes:
+      - media:/data/media
+    depends_on:
+      # Wait for the api so migrations have been applied.
+      api:
+        condition: service_healthy
+      valkey:
+        condition: service_healthy
+    init: true
+    restart: unless-stopped
+    <<: *hardening
+
+  # `make test`: runs pytest against the separate <POSTGRES_DB>_test database.
+  api-test:
+    profiles: ["test"]
+    build:
+      context: ./back
+      target: test
+    environment:
+      <<: *backend-env
+      DATABASE_URL: postgresql+psycopg://${APP_DB_USER}:${APP_DB_PASSWORD}@db:5432/${POSTGRES_DB}_test
+      MEDIA_ROOT: /tmp/media
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  media:

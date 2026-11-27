@@ -1,0 +1,16 @@
+# Direct runtime dependencies, pinned. Resolved against python:3.13.18-slim.
+fastapi==0.165.0
+uvicorn[standard]==0.54.0
+pydantic==2.14.4
+pydantic-settings==2.16.3
+email-validator==2.4.0
+SQLAlchemy[asyncio]==2.1.9
+alembic==1.20.1
+psycopg[binary]==3.3.9
+argon2-cffi==25.1.0
+Authlib==1.9.10
+# Authlib 1.9 uses httpx2 (warns when it falls back to httpx).
+httpx2==2.16.2
+itsdangerous==2.2.0
+aiosmtplib==5.1.3
+celery[redis]==5.7.0
